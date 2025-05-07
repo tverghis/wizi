@@ -19,7 +19,57 @@
 //!
 //! [Writing a client proxy]: https://dbus2.github.io/zbus/client.html
 //! [D-Bus standard interfaces]: https://dbus.freedesktop.org/doc/dbus-specification.html#standard-interfaces,
-use zbus::proxy;
+use std::collections::HashMap;
+
+use futures_util::StreamExt;
+use zbus::{proxy, zvariant::OwnedObjectPath, Connection, Result};
+
+use crate::access_point::AccessPoint;
+
+#[derive(Debug)]
+pub struct WifiDevice<'a> {
+    proxy: WirelessProxy<'a>,
+}
+
+impl<'a> WifiDevice<'a> {
+    pub async fn from_object_path(conn: &'a Connection, path: &'a OwnedObjectPath) -> Result<Self> {
+        let proxy = WirelessProxy::new(conn, path).await?;
+
+        Ok(Self { proxy })
+    }
+
+    pub async fn scan(&self) -> Result<()> {
+        // Request a scan; this will send a PropertyChanged signal for the "LastScan" property once completed.
+        self.proxy.request_scan(HashMap::new()).await?;
+        let mut scan_changed_notif = self.proxy.receive_last_scan_changed().await;
+
+        let mut last_scan_time: Option<i64> = None;
+
+        // Wait for last_scan_time to change before proceeding
+        while let Some(signal) = scan_changed_notif.next().await {
+            let signal = signal.get().await?;
+            if let Some(prev) = last_scan_time {
+                if prev != signal {
+                    break;
+                }
+            }
+            last_scan_time = Some(signal);
+        }
+
+        // At this point, we can query the updated list of access points that were retrieved from this scan.
+        let access_pts = self.proxy.get_access_points().await?;
+        for ap in access_pts.iter() {
+            let access_point =
+                AccessPoint::from_object_path(self.proxy.inner().connection(), ap).await?;
+            let ssid = access_point.ssid().await?;
+            let freq = access_point.freq().await? as f32 / 1000.0;
+            println!("{ssid} ({freq:.1}GHz)");
+        }
+
+        Ok(())
+    }
+}
+
 #[proxy(
     interface = "org.freedesktop.NetworkManager.Device.Wireless",
     default_service = "org.freedesktop.NetworkManager"

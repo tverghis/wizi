@@ -19,7 +19,34 @@
 //!
 //! [Writing a client proxy]: https://dbus2.github.io/zbus/client.html
 //! [D-Bus standard interfaces]: https://dbus.freedesktop.org/doc/dbus-specification.html#standard-interfaces,
-use zbus::proxy;
+
+use zbus::{proxy, zvariant::OwnedObjectPath, Connection, Result};
+
+use crate::wireless::WifiDevice;
+
+#[derive(Debug)]
+pub enum Device<'a> {
+    Wireless(WifiDevice<'a>),
+    Unrecognized,
+}
+
+impl<'a> Device<'a> {
+    pub async fn from_object_path(conn: &'a Connection, path: &'a OwnedObjectPath) -> Result<Self> {
+        let proxy = DeviceProxy::builder(conn).path(path)?.build().await?;
+        let dev_ty = proxy.device_type().await?;
+
+        let device = match dev_ty {
+            2 => {
+                let wifi_device = WifiDevice::from_object_path(conn, path).await?;
+                Device::Wireless(wifi_device)
+            }
+            _ => Device::Unrecognized,
+        };
+
+        Ok(device)
+    }
+}
+
 #[proxy(
     interface = "org.freedesktop.NetworkManager.Device",
     default_service = "org.freedesktop.NetworkManager"

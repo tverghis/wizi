@@ -19,7 +19,39 @@
 //!
 //! [Writing a client proxy]: https://dbus2.github.io/zbus/client.html
 //! [D-Bus standard interfaces]: https://dbus.freedesktop.org/doc/dbus-specification.html#standard-interfaces,
-use zbus::proxy;
+use zbus::{proxy, zvariant::OwnedObjectPath, Connection, Result};
+
+#[derive(Debug)]
+pub struct AccessPoint<'a> {
+    proxy: AccessPointProxy<'a>,
+}
+
+impl<'a> AccessPoint<'a> {
+    pub async fn from_object_path(conn: &'a Connection, path: &'a OwnedObjectPath) -> Result<Self> {
+        let proxy = AccessPointProxy::builder(conn).path(path)?.build().await?;
+
+        Ok(Self { proxy })
+    }
+
+    pub async fn ssid(&self) -> Result<String> {
+        let ssid_bytes = match self.proxy.cached_ssid()? {
+            Some(b) => b,
+            None => self.proxy.ssid().await?,
+        };
+
+        let ssid_string = unsafe { String::from_utf8_unchecked(ssid_bytes) };
+
+        Ok(ssid_string)
+    }
+
+    pub async fn freq(&self) -> Result<u32> {
+        match self.proxy.cached_frequency()? {
+            Some(f) => Ok(f),
+            None => self.proxy.frequency().await,
+        }
+    }
+}
+
 #[proxy(
     interface = "org.freedesktop.NetworkManager.AccessPoint",
     default_service = "org.freedesktop.NetworkManager"
