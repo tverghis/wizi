@@ -18,25 +18,8 @@ async fn main() -> Result<()> {
     for dev in x.iter() {
         let device = device_props(&connection, &dev).await?;
 
-        if let Device::Wireless(wireless_device) = device {
-            println!("Device {}", wireless_device.inner().path());
-            wireless_device.request_scan(HashMap::new()).await?;
-            let mut scan_changed_notif = wireless_device.receive_last_scan_changed().await;
-
-            let mut last_scan_time: Option<i64> = None;
-
-            while let Some(signal) = scan_changed_notif.next().await {
-                let signal = signal.get().await?;
-                if let Some(prev) = last_scan_time {
-                    if prev != signal {
-                        break;
-                    }
-                }
-                last_scan_time = Some(signal);
-            }
-
-            let access_pts = wireless_device.get_access_points().await?;
-            dbg!(access_pts);
+        if let Device::Wireless(wifi_device) = device {
+            wifi_device.scan().await?;
         }
     }
 
@@ -45,8 +28,37 @@ async fn main() -> Result<()> {
 
 #[derive(Debug)]
 enum Device<'a> {
-    Wireless(WirelessProxy<'a>),
+    Wireless(WifiDevice<'a>),
     Unrecognized,
+}
+
+#[derive(Debug)]
+struct WifiDevice<'a> {
+    proxy: WirelessProxy<'a>,
+}
+
+impl<'a> WifiDevice<'a> {
+    async fn scan(&self) -> Result<()> {
+        self.proxy.request_scan(HashMap::new()).await?;
+        let mut scan_changed_notif = self.proxy.receive_last_scan_changed().await;
+
+        let mut last_scan_time: Option<i64> = None;
+
+        while let Some(signal) = scan_changed_notif.next().await {
+            let signal = signal.get().await?;
+            if let Some(prev) = last_scan_time {
+                if prev != signal {
+                    break;
+                }
+            }
+            last_scan_time = Some(signal);
+        }
+
+        let access_pts = self.proxy.get_access_points().await?;
+        dbg!(access_pts);
+
+        Ok(())
+    }
 }
 
 async fn device_props<'a>(
@@ -61,7 +73,12 @@ async fn device_props<'a>(
     let dev_ty = proxy.device_type().await?;
 
     let device = match dev_ty {
-        2 => Device::Wireless(WirelessProxy::new(conn, device_path).await?),
+        2 => {
+            let wifi_device = WifiDevice {
+                proxy: WirelessProxy::new(conn, device_path).await?,
+            };
+            Device::Wireless(wifi_device)
+        }
         _ => Device::Unrecognized,
     };
 
