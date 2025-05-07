@@ -18,7 +18,7 @@ async fn main() -> Result<()> {
     let x = proxy.get_devices().await?;
 
     for dev in x.iter() {
-        let device = device_props(&connection, dev).await?;
+        let device = Device::from_object_path(&connection, dev).await?;
 
         if let Device::Wireless(wifi_device) = device {
             wifi_device.scan().await?;
@@ -34,12 +34,35 @@ enum Device<'a> {
     Unrecognized,
 }
 
+impl<'a> Device<'a> {
+    async fn from_object_path(conn: &'a Connection, path: &'a OwnedObjectPath) -> Result<Self> {
+        let proxy = DeviceProxy::builder(conn).path(path)?.build().await?;
+        let dev_ty = proxy.device_type().await?;
+
+        let device = match dev_ty {
+            2 => {
+                let wifi_device = WifiDevice::from_object_path(conn, path).await?;
+                Device::Wireless(wifi_device)
+            }
+            _ => Device::Unrecognized,
+        };
+
+        Ok(device)
+    }
+}
+
 #[derive(Debug)]
 struct WifiDevice<'a> {
     proxy: WirelessProxy<'a>,
 }
 
 impl<'a> WifiDevice<'a> {
+    async fn from_object_path(conn: &'a Connection, path: &'a OwnedObjectPath) -> Result<Self> {
+        let proxy = WirelessProxy::new(conn, path).await?;
+
+        Ok(Self { proxy })
+    }
+
     async fn scan(&self) -> Result<()> {
         // Request a scan; this will send a PropertyChanged signal for the "LastScan" property once completed.
         self.proxy.request_scan(HashMap::new()).await?;
@@ -61,12 +84,10 @@ impl<'a> WifiDevice<'a> {
         // At this point, we can query the updated list of access points that were retrieved from this scan.
         let access_pts = self.proxy.get_access_points().await?;
         for ap in access_pts.iter() {
-            let ap_proxy = AccessPointProxy::builder(self.proxy.inner().connection())
-                .path(ap)?
-                .build()
-                .await?;
-            let ssid = unsafe { String::from_utf8_unchecked(ap_proxy.ssid().await?) };
-            let freq = ap_proxy.frequency().await? as f32 / 1000.0;
+            let access_point =
+                AccessPoint::from_object_path(self.proxy.inner().connection(), ap).await?;
+            let ssid = access_point.ssid().await?;
+            let freq = access_point.freq().await? as f32 / 1000.0;
             println!("{ssid} ({freq:.1}GHz)");
         }
 
@@ -74,26 +95,33 @@ impl<'a> WifiDevice<'a> {
     }
 }
 
-async fn device_props<'a>(
-    conn: &'a Connection,
-    device_path: &'a OwnedObjectPath,
-) -> Result<Device<'a>> {
-    let proxy = DeviceProxy::builder(conn)
-        .path(device_path)?
-        .build()
-        .await?;
+#[derive(Debug)]
+struct AccessPoint<'a> {
+    proxy: AccessPointProxy<'a>,
+}
 
-    let dev_ty = proxy.device_type().await?;
+impl<'a> AccessPoint<'a> {
+    async fn from_object_path(conn: &'a Connection, path: &'a OwnedObjectPath) -> Result<Self> {
+        let proxy = AccessPointProxy::builder(conn).path(path)?.build().await?;
 
-    let device = match dev_ty {
-        2 => {
-            let wifi_device = WifiDevice {
-                proxy: WirelessProxy::new(conn, device_path).await?,
-            };
-            Device::Wireless(wifi_device)
+        Ok(Self { proxy })
+    }
+
+    async fn ssid(&self) -> Result<String> {
+        let ssid_bytes = match self.proxy.cached_ssid()? {
+            Some(b) => b,
+            None => self.proxy.ssid().await?,
+        };
+
+        let ssid_string = unsafe { String::from_utf8_unchecked(ssid_bytes) };
+
+        Ok(ssid_string)
+    }
+
+    async fn freq(&self) -> Result<u32> {
+        match self.proxy.cached_frequency()? {
+            Some(f) => Ok(f),
+            None => self.proxy.frequency().await,
         }
-        _ => Device::Unrecognized,
-    };
-
-    Ok(device)
+    }
 }
