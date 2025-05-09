@@ -1,7 +1,7 @@
 use iced::{
     keyboard::{self, key::Named, Key},
-    widget::{button::primary, text_input},
-    Event, Length, Task,
+    widget::{button, column, container, text_input},
+    Element, Event, Length, Task,
 };
 use iced_layershell::{
     reexport::{Anchor, KeyboardInteractivity, Layer},
@@ -28,16 +28,19 @@ fn main() -> Result<(), iced_layershell::Error> {
 
 #[derive(Debug, Default)]
 struct Wizi {
-    value: i32,
     ssid_input: String,
     ssids: Vec<String>,
+    selected_index: usize,
 }
 
 #[to_layer_message]
 #[derive(Debug, Clone)]
 enum WiziMessage {
     SsidInputChanged(String),
-    KeyPressed(Key),
+    SelectNext,
+    SelectPrevious,
+    ResetSelection,
+    Quit,
 }
 
 impl Application for Wizi {
@@ -65,33 +68,50 @@ impl Application for Wizi {
     }
 
     fn update(&mut self, message: Self::Message) -> iced::Task<Self::Message> {
+        use WiziMessage::*;
+
         match message {
-            WiziMessage::SsidInputChanged(ssid) => self.ssid_input = ssid,
-            WiziMessage::KeyPressed(Key::Named(Named::Escape)) => return iced::exit(),
-            _ => self.value += 1,
-        }
+            SsidInputChanged(ssid) => {
+                self.ssid_input = ssid;
+                return Task::done(ResetSelection);
+            }
+            Quit => return iced::exit(),
+            SelectNext => {
+                self.selected_index = self.selected_index.saturating_add(1);
+            }
+            SelectPrevious => {
+                self.selected_index = self.selected_index.saturating_sub(1);
+            }
+            ResetSelection => {
+                self.selected_index = 0;
+            }
+            _ => {}
+        };
 
         Task::none()
     }
 
-    fn view(&self) -> iced::Element<Self::Message> {
-        use iced::widget::{button, column, container};
-
+    fn view(&self) -> Element<Self::Message> {
         let filtered_ssids = self.ssids.iter().filter(|ssid| {
             ssid.to_lowercase()
                 .contains(&self.ssid_input.to_lowercase()) // TODO: replace with fuzzy find
         });
 
-        let wifi_ssid_input: iced::Element<Self::Message> =
-            text_input("enter ssid", &self.ssid_input)
-                .on_input(WiziMessage::SsidInputChanged)
-                .into();
+        let wifi_ssid_input: Element<_> = text_input("enter ssid", &self.ssid_input)
+            .on_input(WiziMessage::SsidInputChanged)
+            .into();
 
-        let avail_aps = column(filtered_ssids.map(|ap| {
+        let avail_aps = column(filtered_ssids.enumerate().map(|(i, ap)| {
             container(
                 button(ap.as_str())
                     .width(Length::Fill)
-                    .style(|theme, status| primary(theme, status)),
+                    .style(move |theme, status| {
+                        if i == self.selected_index {
+                            button::primary(theme, status)
+                        } else {
+                            button::text(theme, status)
+                        }
+                    }),
             )
             .into()
         }));
@@ -105,9 +125,12 @@ impl Application for Wizi {
 
     fn subscription(&self) -> iced::Subscription<Self::Message> {
         iced::event::listen_with(|event, _status, _id| match event {
-            Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
-                Some(WiziMessage::KeyPressed(key))
-            }
+            Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => match key {
+                Key::Named(Named::Escape) => Some(WiziMessage::Quit),
+                Key::Named(Named::ArrowDown) => Some(WiziMessage::SelectNext),
+                Key::Named(Named::ArrowUp) => Some(WiziMessage::SelectPrevious),
+                _ => None,
+            },
             _ => None,
         })
     }
