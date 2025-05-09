@@ -38,7 +38,7 @@ impl<'a> WifiDevice<'a> {
         Ok(Self { proxy })
     }
 
-    pub async fn scan(&self) -> Result<()> {
+    pub async fn scan(&'a self) -> Result<Vec<AccessPoint<'a>>> {
         // Request a scan; this will send a PropertyChanged signal for the "LastScan" property once completed.
         self.proxy.request_scan(HashMap::new()).await?;
         let mut scan_changed_notif = self.proxy.receive_last_scan_changed().await;
@@ -58,15 +58,15 @@ impl<'a> WifiDevice<'a> {
 
         // At this point, we can query the updated list of access points that were retrieved from this scan.
         let access_pts = self.proxy.get_access_points().await?;
+        let mut ap_list = Vec::with_capacity(access_pts.len());
+
         for ap in access_pts.iter() {
             let access_point =
-                AccessPoint::from_object_path(self.proxy.inner().connection(), ap).await?;
-            let ssid = access_point.ssid().await?;
-            let freq = access_point.freq().await? as f32 / 1000.0;
-            println!("{ssid} ({freq:.1}GHz)");
+                AccessPoint::from_object_path(self.proxy.inner().connection(), ap.clone()).await?;
+            ap_list.push(access_point);
         }
 
-        Ok(())
+        Ok(ap_list)
     }
 }
 

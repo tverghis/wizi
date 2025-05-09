@@ -27,7 +27,7 @@ pub struct AccessPoint<'a> {
 }
 
 impl<'a> AccessPoint<'a> {
-    pub async fn from_object_path(conn: &'a Connection, path: &'a OwnedObjectPath) -> Result<Self> {
+    pub async fn from_object_path(conn: &'a Connection, path: OwnedObjectPath) -> Result<Self> {
         let proxy = AccessPointProxy::builder(conn).path(path)?.build().await?;
 
         Ok(Self { proxy })
